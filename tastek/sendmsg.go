@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/ah-its-andy/goconf"
+	"github.com/ah-its-andy/smsresender/telebot"
 	"github.com/rs/zerolog/log"
 )
 
@@ -15,6 +16,7 @@ func SendMessage(subject, msg string) error {
 	if err := sendPushPlus(subject, msg); err != nil {
 		return err
 	}
+	telebot.Broadcast("sms", fmt.Sprintf("subject: %s \r\n %s", subject, msg))
 	return nil
 }
 

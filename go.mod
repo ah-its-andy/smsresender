@@ -4,8 +4,8 @@ go 1.19
 
 require (
 	github.com/ah-its-andy/goconf v1.0.1
+	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/rs/zerolog v1.28.0
-	golang.org/x/text v0.9.0
 )
 
 require (
