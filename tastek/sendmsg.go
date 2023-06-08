@@ -20,6 +20,7 @@ import (
 
 var dbconn *DbConn
 var dbconn2 *DbConn
+var channelDbConn *DbConn
 
 func InitDbConn() {
 	gdb, err := db.OpenConnection(db.DefaultOptions())
@@ -35,6 +36,13 @@ func InitDbConn() {
 	}
 	dbconn2 = &DbConn{
 		Conn: gdb2,
+	}
+	gdb3, err := db.OpenConnection(db.DefaultOptions())
+	if err != nil {
+		log.Panic(err)
+	}
+	channelDbConn = &DbConn{
+		Conn: gdb3,
 	}
 }
 
