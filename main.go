@@ -27,7 +27,7 @@ func main() {
 	})
 
 	db.Setup(func(options *db.Options) {
-		options.Dsn = goconf.GetStringOrDefault("gorm.db", "")
+		options.Dsn = goconf.GetStringOrDefault("gorm.dsn", "")
 		options.DriverType = goconf.GetStringOrDefault("gorm.driver", "")
 
 		options.SkipDefaultTransaction = goconf.CastOrDefault("gorm.skipDefaultTransaction", true, goconf.BooleanConversion).(bool)

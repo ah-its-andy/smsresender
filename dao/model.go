@@ -12,9 +12,9 @@ func AutoMigrate() {
 	if err != nil {
 		panic(err)
 	}
-	if db.DefaultOptions().DriverType == "mysql" {
-		gdb = gdb.Set("gorm:table_options", " ENGINE=InnoDB ")
-	}
+	// if db.DefaultOptions().DriverType == "mysql" {
+	// 	gdb = gdb.Set("gorm:table_options", " ENGINE=InnoDB ")
+	// }
 	if !gdb.Migrator().HasTable(&SmsModel{}) {
 		err = gdb.Migrator().AutoMigrate(&SmsModel{})
 		if err != nil {
@@ -25,9 +25,9 @@ func AutoMigrate() {
 
 type SmsModel struct {
 	gorm.Model
-	Device    string `gorm:"column:device;type:varchar;size:32"`
-	MessageId string `gorm:"column:message_id;type:varchar;size:32"`
-	Sender    string `gorm:"column:sender;type:varchar;size:32"`
+	Device    string `gorm:"column:device;type:varchar(32);size:32"`
+	MessageId string `gorm:"column:message_id;type:varchar(32);size:32"`
+	Sender    string `gorm:"column:sender;type:varchar(32);size:32"`
 	Content   string `gorm:"column:content;type:text"`
 	RecTime   string `gorm:"column:recTime;type:datetime"`
 	State     uint32 `gorm:"column:state;type:tinyint;default:0"`
