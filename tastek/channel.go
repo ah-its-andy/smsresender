@@ -131,7 +131,7 @@ func (s *SmsChannel) getSms(session *Session) (*SmsTotalResult, error) {
 	if err := SignIn(session, s.host, s.username, s.password); err != nil {
 		return nil, fmt.Errorf("sign in failed: %w", err)
 	}
-	if sms, err := SmsTotal(session, "192.168.3.1"); err != nil {
+	if sms, err := SmsTotal(session, s.host); err != nil {
 		return nil, fmt.Errorf("failed to get sms: %w", err)
 	} else {
 		return sms, nil
