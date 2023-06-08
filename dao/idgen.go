@@ -1,6 +1,8 @@
 package dao
 
 import (
+	"log"
+
 	"github.com/bwmarrin/snowflake"
 )
 
@@ -9,7 +11,7 @@ var snowGen *snowflake.Node
 func InitIDGen(nodeId int64) {
 	node, err := snowflake.NewNode(nodeId)
 	if err != nil {
-		panic(err)
+		log.Panic("Failed to create snowflake node: %v", err)
 	}
 	snowGen = node
 }

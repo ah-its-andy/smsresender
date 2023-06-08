@@ -46,25 +46,25 @@ func main() {
 
 	devices, ok := goconf.GetSection("devices").GetRaw()
 	if !ok {
-		panic("device not found in config file")
+		log.Panic("device not found in config file")
 	}
 	deviceMap, ok := devices.(map[interface{}]interface{})
 	if !ok {
-		panic("device not found in config file")
+		log.Panic("device not found in config file")
 	}
 	for k, _ := range deviceMap {
 		deviceName := fmt.Sprintf("%s", k)
 		addr := goconf.GetStringOrDefault("devices."+deviceName+".addr", "")
 		if len(addr) == 0 {
-			panic("devices." + deviceName + ".addr is empty")
+			log.Panic("devices." + deviceName + ".addr is empty")
 		}
 		username := goconf.GetStringOrDefault("devices."+deviceName+".username", "")
 		if len(addr) == 0 {
-			panic("devices." + deviceName + ".username is empty")
+			log.Panic("devices." + deviceName + ".username is empty")
 		}
 		password := goconf.GetStringOrDefault("devices."+deviceName+".password", "")
 		if len(addr) == 0 {
-			panic("devices." + deviceName + ".password is empty")
+			log.Panic("devices." + deviceName + ".password is empty")
 		}
 		tok := goconf.GetStringOrDefault("devices."+deviceName+".tok", "")
 		tokInterval := time.Second * 5

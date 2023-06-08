@@ -10,7 +10,7 @@ import (
 func AutoMigrate() {
 	gdb, err := db.OpenConnection(db.DefaultOptions())
 	if err != nil {
-		panic(err)
+		log.Panic("Could not open database connection: %v", err)
 	}
 	// if db.DefaultOptions().DriverType == "mysql" {
 	// 	gdb = gdb.Set("gorm:table_options", " ENGINE=InnoDB ")
@@ -18,7 +18,7 @@ func AutoMigrate() {
 	if !gdb.Migrator().HasTable(&SmsModel{}) {
 		err = gdb.Migrator().AutoMigrate(&SmsModel{})
 		if err != nil {
-			panic(err)
+			log.Panic("migrate failed with error: %v", err)
 		}
 	}
 }

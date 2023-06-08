@@ -24,14 +24,14 @@ var dbconn2 *DbConn
 func InitDbConn() {
 	gdb, err := db.OpenConnection(db.DefaultOptions())
 	if err != nil {
-		panic(err)
+		log.Panic(err)
 	}
 	dbconn = &DbConn{
 		Conn: gdb,
 	}
 	gdb2, err := db.OpenConnection(db.DefaultOptions())
 	if err != nil {
-		panic(err)
+		log.Panic(err)
 	}
 	dbconn2 = &DbConn{
 		Conn: gdb2,
@@ -151,6 +151,9 @@ func SendMessage(id uint) error {
 		}
 
 		content := strings.Builder{}
+		content.WriteString("設備：")
+		content.WriteString(model.Device)
+		content.WriteString("\r\n")
 		content.WriteString("來自：")
 		content.WriteString(model.Sender)
 		content.WriteString("\r\n")
