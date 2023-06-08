@@ -106,7 +106,6 @@ func SmsTotal(session *Session, host string) (*SmsTotalResult, error) {
 			msg.Content = "没有内容"
 		} else {
 			decodeContent := decodeMessage(msg.Content, false)
-
 			result.Messages[i].Content = string(decodeContent)
 		}
 	}

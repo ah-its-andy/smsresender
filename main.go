@@ -11,6 +11,8 @@ import (
 
 	"github.com/ah-its-andy/goconf"
 	physicalfile "github.com/ah-its-andy/goconf/physicalFile"
+	"github.com/ah-its-andy/smsresender/dao"
+	"github.com/ah-its-andy/smsresender/db"
 	"github.com/ah-its-andy/smsresender/tastek"
 	"github.com/ah-its-andy/smsresender/telebot"
 	"github.com/ah-its-andy/smsresender/typeconv"
@@ -23,6 +25,23 @@ func main() {
 	goconf.Init(func(b goconf.Builder) {
 		b.AddSource(physicalfile.Yaml(*configFilePath)).AddSource(goconf.EnvironmentVariable(""))
 	})
+
+	db.Setup(func(options *db.Options) {
+		options.Dsn = goconf.GetStringOrDefault("gorm.db", "")
+		options.DriverType = goconf.GetStringOrDefault("gorm.driver", "")
+
+		options.SkipDefaultTransaction = goconf.CastOrDefault("gorm.skipDefaultTransaction", true, goconf.BooleanConversion).(bool)
+
+		options.MaxIdleConns = goconf.CastOrDefault("mysql.maxIdleConns", 10, goconf.IntConversion).(int)
+		options.MaxOpenConns = goconf.CastOrDefault("mysql.maxOpenConns", 50, goconf.IntConversion).(int)
+		options.MaxIdleTime = goconf.CastOrDefault("mysql.maxIdleTime", time.Minute*5, func(s string) (interface{}, error) {
+			return time.ParseDuration(s)
+		}).(time.Duration)
+	})
+	dao.AutoMigrate()
+	dao.InitIDGen(1)
+	tastek.InitDbConn()
+
 	InitTelebot("")
 
 	devices, ok := goconf.GetSection("devices").GetRaw()
@@ -58,6 +77,7 @@ func main() {
 		go channel.Start()
 	}
 
+	go tastek.CronlyPullMessage()
 	select {}
 }
 

@@ -3,10 +3,12 @@ package tastek
 import (
 	"fmt"
 	"net/http/cookiejar"
-	"strings"
 	"time"
 
+	"github.com/ah-its-andy/smsresender/dao"
+	"github.com/ah-its-andy/smsresender/db"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
 type SmsChannel struct {
@@ -49,47 +51,70 @@ func (s *SmsChannel) poll() {
 		breaks := false
 		select {
 		case <-timer.C:
+			gdb, err := db.OpenConnection(db.DefaultOptions())
+			if err != nil {
+				log.Printf("[ERROR] db.OpenConnection failed: %v", err)
+			}
 			jar, _ := cookiejar.New(nil)
 			session := NewSession(jar)
 			if sms, err := s.getSms(session); err != nil {
 				log.Printf("[ERROR] Failed to get SMS: %v", err)
 			} else {
-				msgSubject := ""
-				msgContent := strings.Builder{}
-				if len(sms.Messages) == 1 {
-					msgSubject = fmt.Sprintf("%s有一条新消息", s.channelName)
-					msgContent.WriteString(fmt.Sprintf("发件人: %s", sms.Messages[0].Number))
-					msgContent.WriteString("\r\n")
-					if len(sms.Messages[0].Content) == 0 {
-						msgContent.WriteString("正文: 没有内容")
-						msgContent.WriteString("\r\n")
-					} else {
-						msgContent.WriteString(fmt.Sprintf("正文: %s", sms.Messages[0].Content))
-						msgContent.WriteString("\r\n")
-					}
-				} else {
-					msgSubject = fmt.Sprintf("%s有%d条新消息", s.channelName, len(sms.Messages))
-					for _, msg := range sms.Messages {
-						msgContent.WriteString(fmt.Sprintf("发件人: %s", msg.Number))
-						msgContent.WriteString("\r\n")
-						if len(msg.Content) == 0 {
-							msgContent.WriteString("正文: 没有内容")
-							msgContent.WriteString("\r\n")
-						} else {
-							msgContent.WriteString(fmt.Sprintf("正文: %s", msg.Content))
-							msgContent.WriteString("\r\n")
+				err := gdb.Transaction(func(tx *gorm.DB) error {
+					for _, message := range sms.Messages {
+						model := &dao.SmsModel{
+							Device:    s.channelName,
+							MessageId: message.ID,
+							Sender:    message.Number,
+							Content:   message.Content,
+							RecTime:   message.Date,
+							State:     10,
 						}
-						msgContent.WriteString("========")
-						msgContent.WriteString("\r\n")
+						if err := dao.CreateSms(tx, model); err != nil {
+							return err
+						}
 					}
+					return nil
+				})
+				if err != nil {
+					log.Printf("[ERROR] Failed to create SMS: %v", err)
+					return
 				}
-				if err := SendMessage(msgSubject, msgContent.String()); err != nil {
-					log.Printf("[ERROR] SendMessage failed: %v", err)
-				} else {
-					// for _, msg := range sms.Messages {
-					// 	DelSms(session, s.host, msg.ID)
-					// }
-				}
+
+				// msgContent := strings.Builder{}
+				// if len(sms.Messages) == 1 {
+				// 	msgContent.WriteString(fmt.Sprintf("发件人: %s", sms.Messages[0].Number))
+				// 	msgContent.WriteString("\r\n")
+				// 	if len(sms.Messages[0].Content) == 0 {
+				// 		msgContent.WriteString("正文: 没有内容")
+				// 		msgContent.WriteString("\r\n")
+				// 	} else {
+				// 		msgContent.WriteString(fmt.Sprintf("正文: %s", sms.Messages[0].Content))
+				// 		msgContent.WriteString("\r\n")
+				// 	}
+				// } else {
+				// 	for _, msg := range sms.Messages {
+				// 		msgContent.WriteString(fmt.Sprintf("发件人: %s", msg.Number))
+				// 		msgContent.WriteString("\r\n")
+				// 		if len(msg.Content) == 0 {
+				// 			msgContent.WriteString("正文: 没有内容")
+				// 			msgContent.WriteString("\r\n")
+				// 		} else {
+				// 			msgContent.WriteString(fmt.Sprintf("正文: %s", msg.Content))
+				// 			msgContent.WriteString("\r\n")
+				// 		}
+				// 		msgContent.WriteString("========")
+				// 		msgContent.WriteString("\r\n")
+				// 	}
+				// }
+
+				// if err := SendMessage(msgSubject, msgContent.String()); err != nil {
+				// 	log.Printf("[ERROR] SendMessage failed: %v", err)
+				// } else {
+				// 	// for _, msg := range sms.Messages {
+				// 	// 	DelSms(session, s.host, msg.ID)
+				// 	// }
+				// }
 			}
 		case <-s.closeChan:
 			log.Printf("[DEBUG] Tastek channel closing")
