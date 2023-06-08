@@ -18,7 +18,7 @@ func NewMySqlDialector(opts *Options) gorm.Dialector {
 
 func NewSqliteDialector(opts *Options) gorm.Dialector {
 	exec, _ := filepath.Abs("./")
-	return sqlite.Open(filepath.Join(exec, "sms.db"))
+	return sqlite.Open(filepath.Join(exec, "data", "sms.db"))
 }
 
 func NewDialector(opts *Options) (gorm.Dialector, error) {
