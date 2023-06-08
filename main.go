@@ -74,10 +74,24 @@ func main() {
 			}
 		}
 		channel := tastek.NewSmsChannel(deviceName, addr, username, password, tokInterval)
-		go channel.Start()
+		go func() {
+			defer func() {
+				if err := recover(); err != nil {
+					log.Printf("[PANIC ERROR] Error while trying to connect to channel server: %v", err)
+				}
+			}()
+			channel.Start()
+		}()
 	}
 
-	go tastek.CronlyPullMessage()
+	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("[PANIC ERROR] Error while trying to connect to pull message: %v", err)
+			}
+		}()
+		tastek.CronlyPullMessage()
+	}()
 	select {}
 }
 

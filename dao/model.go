@@ -79,7 +79,7 @@ func CreateSms(gdb *gorm.DB, entity *SmsModel) error {
 		return err
 	}
 	if model != nil {
-		log.Printf("Duplicate entry %s-%s-%s", entity.Device, entity.Sender, entity.Content)
+		//log.Printf("Duplicate entry %s-%s-%s", entity.Device, entity.Sender, entity.Content)
 		return nil
 	}
 	entity.ID = NextID()

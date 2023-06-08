@@ -172,6 +172,7 @@ func SendMessage(id uint) error {
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
