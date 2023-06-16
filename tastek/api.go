@@ -24,6 +24,7 @@ func SignIn(session *Session, host, user, password string) error {
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode > 299 {
 		return fmt.Errorf("response code: %d", resp.StatusCode)
 	}
@@ -40,6 +41,7 @@ func SignOut(session *Session, host string) error {
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode > 299 {
 		return fmt.Errorf("response code: %d", resp.StatusCode)
 	}
@@ -58,6 +60,7 @@ func DelSms(session *Session, host string, msgid string) error {
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode > 299 {
 		return fmt.Errorf("response code: %d", resp.StatusCode)
 	}
