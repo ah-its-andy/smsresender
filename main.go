@@ -1,19 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ah-its-andy/goconf"
 	physicalfile "github.com/ah-its-andy/goconf/physicalFile"
-	"github.com/ah-its-andy/smsresender/dao"
-	"github.com/ah-its-andy/smsresender/db"
-	"github.com/ah-its-andy/smsresender/tastek"
+	"gopkg.in/fsnotify.v1"
+
 	"github.com/ah-its-andy/smsresender/telebot"
 	"github.com/ah-its-andy/smsresender/typeconv"
 )
@@ -26,73 +27,151 @@ func main() {
 		b.AddSource(physicalfile.Yaml(*configFilePath)).AddSource(goconf.EnvironmentVariable(""))
 	})
 
-	db.Setup(func(options *db.Options) {
-		options.Dsn = goconf.GetStringOrDefault("gorm.dsn", "")
-		options.DriverType = goconf.GetStringOrDefault("gorm.driver", "")
-
-		options.SkipDefaultTransaction = goconf.CastOrDefault("gorm.skipDefaultTransaction", true, goconf.BooleanConversion).(bool)
-
-		options.MaxIdleConns = goconf.CastOrDefault("mysql.maxIdleConns", 10, goconf.IntConversion).(int)
-		options.MaxOpenConns = goconf.CastOrDefault("mysql.maxOpenConns", 50, goconf.IntConversion).(int)
-		options.MaxIdleTime = goconf.CastOrDefault("mysql.maxIdleTime", time.Minute*5, func(s string) (interface{}, error) {
-			return time.ParseDuration(s)
-		}).(time.Duration)
-	})
-	dao.AutoMigrate()
-	dao.InitIDGen(1)
-	tastek.InitDbConn()
-
 	InitTelebot("")
 
-	devices, ok := goconf.GetSection("devices").GetRaw()
-	if !ok {
-		log.Panic("device not found in config file")
+	select {}
+}
+
+type IncomesMessage struct {
+	Sender   string
+	Date     string
+	Time     string
+	Serial   string
+	Sequence string
+	Type     string //ext
+	FileName string
+}
+
+func ParseIncomesMessage(s string) (*IncomesMessage, error) {
+	parts := strings.Split(s, "_")
+	if len(parts) != 6 || !strings.HasPrefix(parts[0], "IN") || !strings.Contains(parts[5], ".") {
+		return nil, fmt.Errorf("invalid message format")
 	}
-	deviceMap, ok := devices.(map[interface{}]interface{})
-	if !ok {
-		log.Panic("device not found in config file")
+
+	return &IncomesMessage{
+		Date:     parts[0][2:],
+		Time:     parts[1],
+		Serial:   parts[2],
+		Sender:   parts[3],
+		Sequence: parts[4],
+		Type:     strings.Split(parts[5], ".")[1],
+		FileName: s,
+	}, nil
+}
+
+func ReadFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
-	for k, _ := range deviceMap {
-		deviceName := fmt.Sprintf("%s", k)
-		addr := goconf.GetStringOrDefault("devices."+deviceName+".addr", "")
-		if len(addr) == 0 {
-			log.Panic("devices." + deviceName + ".addr is empty")
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+func ResendIncomesMessage(im *IncomesMessage) error {
+	content, err := ReadFile(im.FileName)
+	if err != nil {
+		return err
+	}
+	builder := strings.Builder{}
+	builder.WriteString("Sender: ")
+	builder.WriteString(im.Sender)
+	builder.WriteString("\r\n")
+	builder.WriteString("Date: ")
+	builder.WriteString(im.Date)
+	builder.WriteString(" ")
+	builder.WriteString(im.Time)
+	builder.WriteString("\r\n")
+	builder.WriteString("Content:\r\n")
+	builder.WriteString("====== BEGIN ======\r\n")
+	builder.Write(content)
+	builder.WriteString("\r\n======= END =======")
+
+	sentDir := goconf.GetStringOrDefault("sentdir", "/etc/smsresenderd/sent")
+	destFile, err := os.Create(filepath.Join(sentDir, filepath.Base(im.FileName)))
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+	if _, err := destFile.Write(content); err != nil {
+		return err
+	}
+
+	telebot.Broadcast("smsbot", builder.String())
+
+	if err := os.Remove(im.FileName); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func WatchIncomesMessage(ctx context.Context) <-chan *IncomesMessage {
+	incomesDir := goconf.GetStringOrDefault("incomesdir", "/etc/smsresenderd/incomes")
+
+	messages := make(chan *IncomesMessage)
+	defer close(messages)
+	events := WatchDir(ctx, incomesDir)
+	for {
+		event, ok := <-events
+		if !ok {
+			break
 		}
-		username := goconf.GetStringOrDefault("devices."+deviceName+".username", "")
-		if len(addr) == 0 {
-			log.Panic("devices." + deviceName + ".username is empty")
+		fileName := filepath.Base(event)
+		incomesMsg, err := ParseIncomesMessage(fileName)
+		if err != nil {
+			log.Printf("Error parsing incomes message from %s", event)
+			continue
 		}
-		password := goconf.GetStringOrDefault("devices."+deviceName+".password", "")
-		if len(addr) == 0 {
-			log.Panic("devices." + deviceName + ".password is empty")
-		}
-		tok := goconf.GetStringOrDefault("devices."+deviceName+".tok", "")
-		tokInterval := time.Second * 5
-		if len(tok) > 0 {
-			if t, err := time.ParseDuration(tok); err == nil {
-				tokInterval = t
+		messages <- incomesMsg
+	}
+	return messages
+}
+
+func WatchDir(ctx context.Context, dir string) <-chan string {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	done := make(chan bool)
+	events := make(chan string)
+
+	go func() {
+		defer close(done)
+		defer close(events)
+
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					events <- event.Name
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Println("error:", err)
+			case <-ctx.Done():
+				return
 			}
 		}
-		channel := tastek.NewSmsChannel(deviceName, addr, username, password, tokInterval)
-		go func() {
-			defer func() {
-				if err := recover(); err != nil {
-					log.Printf("[PANIC ERROR] Error while trying to connect to channel server: %v", err)
-				}
-			}()
-			channel.Start()
-		}()
+	}()
+
+	err = watcher.Add(dir)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				log.Printf("[PANIC ERROR] Error while trying to connect to pull message: %v", err)
-			}
-		}()
-		tastek.CronlyPullMessage()
+		<-ctx.Done()
+		watcher.Close()
 	}()
-	select {}
+
+	return events
 }
 
 func InitTelebot(env string) {
