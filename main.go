@@ -1,22 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ah-its-andy/goconf"
 	physicalfile "github.com/ah-its-andy/goconf/physicalFile"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"gopkg.in/fsnotify.v1"
-
-	"github.com/ah-its-andy/smsresender/telebot"
-	"github.com/ah-its-andy/smsresender/typeconv"
 )
 
 func main() {
@@ -27,9 +29,7 @@ func main() {
 		b.AddSource(physicalfile.Yaml(*configFilePath)).AddSource(goconf.EnvironmentVariable(""))
 	})
 
-	InitTelebot("")
-
-	Startup()
+	WatchIncomesMessage(context.Background())
 
 	select {}
 }
@@ -41,7 +41,9 @@ type IncomesMessage struct {
 	// Serial   string
 	// Sequence string
 	// Type     string //ext
+	Dir      string
 	FileName string
+	Content  string
 }
 
 // 0 IN20230725
@@ -50,19 +52,27 @@ type IncomesMessage struct {
 // 3 CMHK
 // 4 00.txt
 func ParseIncomesMessage(s string) (*IncomesMessage, error) {
-	parts := strings.Split(s, "_")
-	if len(parts) < 5 || !strings.HasPrefix(parts[0], "IN") || !strings.Contains(parts[4], ".") {
-		return nil, fmt.Errorf("invalid message format")
+	dir := filepath.Dir(s)
+	fileName := filepath.Base(s)
+	ext := filepath.Ext(fileName)
+	if !strings.EqualFold(ext, ".txt") {
+		log.Printf("[DEBUG] File %s is not a text message, skip. \r\n", fileName)
+		return &IncomesMessage{
+			Dir:      dir,
+			Content:  fmt.Sprintf("File '%s' is not a text message, please check file manually.", fileName),
+			FileName: filepath.Base(s),
+		}, nil
+	}
+
+	content, err := ReadFile(s)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %s: %v", s, err)
 	}
 
 	return &IncomesMessage{
-		// Date:     parts[0][2:],
-		// Time:     parts[1],
-		// Serial:   parts[2],
-		// Sender:   parts[3],
-		// Sequence: parts[4],
-		// Type:     strings.Split(parts[5], ".")[1],
-		FileName: s,
+		Dir:      dir,
+		Content:  string(content),
+		FileName: filepath.Base(s),
 	}, nil
 }
 
@@ -75,70 +85,133 @@ func ReadFile(path string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
+func SendToTgbot(chatId int64, msgText string) error {
+	client, err := tgbotapi.NewBotAPI(goconf.GetStringOrDefault("telebot.smsbot.token", ""))
+	if err != nil {
+		return err
+	}
+	msg := tgbotapi.NewMessage(chatId, msgText)
+	if _, err := client.Send(msg); err != nil {
+		return fmt.Errorf("SendToTgbot: %v", err)
+	}
+	return nil
+}
+
 func ResendIncomesMessage(im *IncomesMessage) error {
-	content, err := ReadFile(im.FileName)
-	if err != nil {
-		return err
-	}
 	builder := strings.Builder{}
-	builder.WriteString("FileName: ")
-	builder.WriteString(im.FileName)
-	builder.WriteString("\r\n")
+	neatName := im.FileName[:len(im.FileName)-len(filepath.Ext(im.FileName))]
+	parts := strings.Split(neatName, "_")
+	//IN20230725_174431_00_+852193193_00
+	columnNames := []string{
+		"Date",
+		"Time",
+		"-",
+		"Sender",
+		"Index",
+	}
+	for i, part := range parts {
+		if i+1 >= len(columnNames) || columnNames[i] == "-" {
+			continue
+		}
+		builder.WriteString(columnNames[i])
+		builder.WriteString(": ")
+		builder.WriteString(part)
+		builder.WriteString("\r\n")
+	}
 	builder.WriteString("Content:\r\n")
-	builder.WriteString("====== BEGIN ======\r\n")
-	builder.Write(content)
-	builder.WriteString("\r\n======= END =======")
+	builder.Write([]byte(im.Content))
 
-	sentDir := goconf.GetStringOrDefault("sentdir", "/etc/smsresenderd/sent")
-	destFile, err := os.Create(filepath.Join(sentDir, filepath.Base(im.FileName)))
-	if err != nil {
+	if err := SendToTgbot(1034079183, builder.String()); err != nil {
 		return err
 	}
-	defer destFile.Close()
-	if _, err := destFile.Write(content); err != nil {
-		return err
-	}
-
-	telebot.Broadcast("smsbot", builder.String())
-
-	if err := os.Remove(im.FileName); err != nil {
+	if err := SendPushPlus("收到新消息", builder.String()); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func Startup() {
-	c := WatchIncomesMessage(context.Background())
-	for {
-		msg := <-c
-		if msg == nil {
-			continue
-		}
-		ResendIncomesMessage(msg)
+func MoveFile(source, target string) error {
+	// 检查目标目录是否存在
+	targetDir := filepath.Dir(target)
+	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+		return err
 	}
+
+	// 检查目标文件是否存在
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		// 目标文件存在,删除目标文件
+		err := os.Remove(target)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 复制文件到目标路径
+	err := CopyFile(source, target)
+	if err != nil {
+		return err
+	}
+
+	// 删除源文件
+	return os.Remove(source)
 }
 
-func WatchIncomesMessage(ctx context.Context) <-chan *IncomesMessage {
-	incomesDir := goconf.GetStringOrDefault("incomesdir", "/etc/smsresenderd/incomes")
-
-	messages := make(chan *IncomesMessage)
-	defer close(messages)
-	events := WatchDir(ctx, incomesDir)
-	for {
-		event, ok := <-events
-		if !ok {
-			break
-		}
-		fileName := filepath.Base(event)
-		incomesMsg, err := ParseIncomesMessage(fileName)
-		if err != nil {
-			log.Printf("Error parsing incomes message from %s", event)
-			continue
-		}
-		messages <- incomesMsg
+func CopyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
 	}
-	return messages
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	if err != nil {
+		return err
+	}
+	return out.Close()
+}
+
+func WatchIncomesMessage(ctx context.Context) {
+	incomesDir := goconf.GetStringOrDefault("incomesdir", "/etc/smsresenderd/incomes")
+	log.Printf("Starting to watch inbox directory: %s\r\n", incomesDir)
+	for {
+		files, err := ioutil.ReadDir(incomesDir)
+		if err != nil {
+			panic(err)
+		}
+
+		if len(files) > 0 {
+			for _, file := range files {
+				if file.IsDir() {
+					continue
+				}
+				event := filepath.Join(incomesDir, file.Name())
+				log.Printf("[DEBUG] Found file %v", event)
+				incomesMsg, err := ParseIncomesMessage(event)
+				if err != nil {
+					log.Printf("Error parsing incomes message from %s", event)
+					return
+				}
+				if incomesMsg != nil {
+					if err := ResendIncomesMessage(incomesMsg); err != nil {
+						log.Printf("Error resending income message from %s, err: %v", event, err)
+						return
+					}
+					sentDir := goconf.GetStringOrDefault("sentdir", "/etc/smsresenderd/sent")
+					if err := MoveFile(filepath.Join(incomesMsg.Dir, incomesMsg.FileName), filepath.Join(sentDir, incomesMsg.FileName)); err != nil {
+						log.Printf("Error resending income message from %s, err: %v", event, err)
+					}
+				}
+			}
+		}
+		time.Sleep(time.Second * 5)
+	}
 }
 
 func WatchDir(ctx context.Context, dir string) <-chan string {
@@ -187,61 +260,29 @@ func WatchDir(ctx context.Context, dir string) <-chan string {
 	return events
 }
 
-func InitTelebot(env string) {
-	disabled := os.Getenv("MONOREPO_DISABLE_TELEBOT")
-	if strings.EqualFold(disabled, "1") {
-		log.Printf("InitTelebot: MONOREPO_DISABLE_TELEBOT is set, telebot is disabled")
-		return
+func SendPushPlus(title, msgText string) error {
+	data := map[string]string{
+		"token":    goconf.GetStringOrDefault("pushplus.token", ""),
+		"title":    title,
+		"content":  msgText,
+		"template": "txt",
+		"channel":  "wechat",
 	}
-	telebotSec, ok := goconf.GetSection("telebot").GetRaw()
-	if !ok {
-		log.Printf("telebot config not found, telebot will not work")
-		return
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(data); err != nil {
+		return err
 	}
-	telebotMap, ok := telebotSec.(map[any]any)
-	if !ok {
-		fmt.Println("telebot config is not a map")
-		os.Exit(-1)
+	resp, err := http.Post("https://www.pushplus.plus/send", "application/json", &buf)
+	if err != nil {
+		return err
 	}
-	telebotNames := make([]string, 0)
-	for k, _ := range telebotMap {
-		telebotNames = append(telebotNames, typeconv.MustString(k))
+	defer resp.Body.Close()
+	respContent, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
 	}
-	for _, name := range telebotNames {
-		enabled := goconf.CastOrDefault("telebot."+name+".enabled", true, goconf.BooleanConversion).(bool)
-		if !enabled {
-			continue
-		}
-		token := goconf.GetStringOrDefault("telebot."+name+".token", "")
-		if len(token) == 0 {
-			continue
-		}
-
-		mode := goconf.GetStringOrDefault("telebot."+name+".mode", "client")
-		users := goconf.GetStringOrDefault("telebot."+name+".users", "")
-		listenForUser := goconf.CastOrDefault("telebot."+name+".listen", false, goconf.BooleanConversion).(bool)
-		chatIds := make([]int64, 0)
-		if len(users) > 0 {
-			for _, id := range strings.Split(users, ",") {
-				chatId, err := strconv.ParseInt(id, 10, 64)
-				if err != nil {
-					fmt.Println("telebot user id is not a number: " + id)
-					os.Exit(-1)
-				}
-				chatIds = append(chatIds, chatId)
-			}
-		}
-
-		telebot.AddBot(name, func(o *telebot.Options) {
-			o.Token = token
-			o.UserIds = chatIds
-			o.ListenForUser = false
-			o.UseRedisQueue = false
-			o.Mode = mode
-		})
-
-		log.Printf("[telebot] telebot %s is started, listen for user: %v",
-			name,
-			listenForUser)
+	if resp.StatusCode > 299 {
+		return fmt.Errorf("send Push Plus Response Error: [%d] %s", resp.StatusCode, string(respContent))
 	}
+	return nil
 }
